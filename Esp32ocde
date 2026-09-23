@@ -1,0 +1,209 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <Adafruit_INA219.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+Adafruit_INA219 ina219;
+
+#define ONE_WIRE_BUS 4
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+WebServer server(80);
+float voltage = 0.0;
+float current = 0.0;
+float power = 0.0;
+float temperature = 0.0;
+int soc = 0;
+
+int calculateSOC(float voltage) {
+  if (voltage >= 4.20) return 100;
+  if (voltage >= 4.10) return 90;
+  if (voltage >= 4.00) return 80;
+  if (voltage >= 3.90) return 70;
+  if (voltage >= 3.80) return 60;
+  if (voltage >= 3.70) return 50;
+  if (voltage >= 3.60) return 40;
+  if (voltage >= 3.50) return 30;
+  if (voltage >= 3.40) return 20;
+  if (voltage >= 3.30) return 10;
+  return 0;
+}
+
+void readSensors() {
+
+  voltage = ina219.getBusVoltage_V();
+  current = ina219.getCurrent_mA();
+
+  power = voltage * (current / 1000.0);
+
+  sensors.requestTemperatures();
+  temperature = sensors.getTempCByIndex(0);
+
+  soc = calculateSOC(voltage);
+}
+
+
+void handleRoot() {
+
+  readSensors();
+
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Battery Digital Twin Dashboard</title>
+
+<style>
+body {
+  font-family: Arial;
+  text-align: center;
+  background: #f2f2f2;
+}
+
+h1 {
+  color: #222;
+}
+
+.card {
+  background: white;
+  padding: 20px;
+  margin: 15px auto;
+  max-width: 400px;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.value {
+  font-size: 30px;
+  font-weight: bold;
+}
+
+.status {
+  font-size: 20px;
+  font-weight: bold;
+}
+</style>
+
+<meta http-equiv="refresh" content="3">
+
+</head>
+
+<body>
+
+<h1>Battery Digital Twin</h1>
+
+<div class="card">
+<h2>Voltage</h2>
+<div class="value">)rawliteral";
+
+  html += String(voltage, 2);
+  html += R"rawliteral( V</div>
+</div>
+
+<div class="card">
+<h2>Current</h2>
+<div class="value">)rawliteral";
+
+  html += String(current, 2);
+  html += R"rawliteral( mA</div>
+</div>
+
+<div class="card">
+<h2>Power</h2>
+<div class="value">)rawliteral";
+
+  html += String(power, 2);
+  html += R"rawliteral( W</div>
+</div>
+
+<div class="card">
+<h2>Temperature</h2>
+<div class="value">)rawliteral";
+
+  html += String(temperature, 1);
+  html += R"rawliteral( °C</div>
+</div>
+
+<div class="card">
+<h2>Estimated SOC</h2>
+<div class="value">)rawliteral";
+
+  html += String(soc);
+  html += R"rawliteral( %</div>
+</div>
+
+<div class="card">
+<h2>Battery Status</h2>
+<div class="status">)rawliteral";
+
+  if (temperature > 45) {
+    html += "WARNING: HIGH TEMPERATURE";
+  }
+  else if (soc <= 20) {
+    html += "LOW BATTERY";
+  }
+  else {
+    html += "NORMAL";
+  }
+
+  html += R"rawliteral(</div>
+</div>
+
+</body>
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", html);
+}
+
+void setup() {
+
+  Serial.begin(115200);
+
+  Wire.begin();
+
+
+  if (!ina219.begin()) {
+    Serial.println("INA219 not found!");
+    while (1);
+  }
+
+
+  sensors.begin();
+
+
+  WiFi.begin(ssid, password);
+
+  Serial.print("Connecting to Wi-Fi");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("Wi-Fi Connected!");
+
+  Serial.print("Dashboard IP Address: ");
+  Serial.println(WiFi.localIP());
+
+
+  server.on("/", handleRoot);
+  server.begin();
+
+  Serial.println("Dashboard started.");
+}
+
+
+void loop() {
+
+  server.handleClient();
+
+  delay(100);
+}
